@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=qreolink
+Comment=Lightweight Linux desktop client for viewing multiple Reolink IP cameras over RTSP
+Exec=qreolink
+Icon=qreolink
+StartupWMClass=qreolink
+Terminal=false
+Categories=AudioVideo;Video;Viewer;
+StartupNotify=true
