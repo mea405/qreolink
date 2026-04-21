@@ -123,8 +123,20 @@ void MpvWidget::stop()
 
     const char* cmd[] = {"stop", nullptr};
     mpv_command(mpv_, cmd);
+    setAudioEnabled(false);
     emitStatus(QStringLiteral("Stopped"));
     currentUrl_.clear();
+}
+
+void MpvWidget::setAudioEnabled(bool enabled)
+{
+    if (mpv_ == nullptr) {
+        return;
+    }
+    const char* value = enabled ? "auto" : "no";
+    if (mpv_set_property_string(mpv_, "audio", value) < 0) {
+        qWarning() << "mpv_set_property audio failed";
+    }
 }
 
 bool MpvWidget::initRenderContext()
