@@ -2,6 +2,10 @@
 
 Minimal Linux desktop client for Reolink cameras using Qt + libmpv.
 
+**Дисклеймер:** проект **неофициальный** и не связан с Reolink Technology, не одобрен и не поддерживается ею. Название «Reolink» — товарный знак соответствующих правообладателей.
+
+**Disclaimer:** this project is **unofficial** and is not affiliated with, endorsed by, or sponsored by Reolink Technology. “Reolink” is a trademark of its respective owners.
+
 ## Описание (RU)
 
 `qreolink` — это легкий desktop-клиент для Linux, который позволяет удобно смотреть несколько IP-камер Reolink по RTSP. Приложение построено на `Qt` и `libmpv`, поддерживает сетку камер (2x2) для постоянного мониторинга и режим одной камеры в высоком качестве. Для каждой камеры можно задать отдельные параметры подключения (IP, логин, пароль, main/sub stream), быстро переключаться между режимами просмотра и получать диагностические статусы потока прямо в интерфейсе. Программа ориентирована на стабильную локальную работу без облачных сервисов и лишней нагрузки.
@@ -78,6 +82,12 @@ It reads keys from `QSettings` under:
 - `cameras/<index>/password`
 - `cameras/<index>/mainPath`
 - `cameras/<index>/subPath`
+
+## License
+
+This program is licensed under the [GNU General Public License v3.0](LICENSE). Linking against `libmpv` typically requires a GPL-compatible license for the combined work; GPLv3 is used here for clarity.
+
+Программа распространяется на условиях [GNU GPL v3](LICENSE).
 
 ## Notes
 
