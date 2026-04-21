@@ -24,6 +24,7 @@ private:
         QLabel* status = nullptr;
         MpvWidget* player = nullptr;
         QPushButton* toggleButton = nullptr;
+        QPushButton* audioButton = nullptr;
     };
 
     QVector<CameraConfig> loadCameras();

@@ -109,8 +109,13 @@ void MainWindow::buildUi()
         auto* header = new QHBoxLayout();
         tile.title = new QLabel(cameras_[i].name, tile.container);
         tile.toggleButton = new QPushButton(QStringLiteral("Single"), tile.container);
+        tile.audioButton = new QPushButton(QStringLiteral("Audio"), tile.container);
+        tile.audioButton->setCheckable(true);
+        tile.audioButton->setVisible(false);
+        tile.audioButton->setToolTip(QStringLiteral("Enable audio from the main stream (single view only)"));
         header->addWidget(tile.title);
         header->addStretch();
+        header->addWidget(tile.audioButton);
         header->addWidget(tile.toggleButton);
 
         tile.player = new MpvWidget(tile.container);
@@ -122,6 +127,12 @@ void MainWindow::buildUi()
 
         connect(tile.toggleButton, &QPushButton::clicked, this, [this, i]() {
             toggleSingleView(i);
+        });
+        connect(tile.audioButton, &QPushButton::toggled, this, [this, i](bool on) {
+            if (singleIndex_ != i || i < 0 || i >= tiles_.size() || tiles_[i].player == nullptr) {
+                return;
+            }
+            tiles_[i].player->setAudioEnabled(on);
         });
         connect(tile.player, &MpvWidget::statusChanged, this, [this, i](const QString& status) {
             if (i >= 0 && i < tiles_.size() && tiles_[i].status != nullptr) {
@@ -232,8 +243,15 @@ void MainWindow::updateLayoutAndStreams()
             const int col = i % 2;
             tiles_[i].container->setVisible(true);
             tiles_[i].toggleButton->setText(QStringLiteral("Single"));
+            if (tiles_[i].audioButton != nullptr) {
+                tiles_[i].audioButton->blockSignals(true);
+                tiles_[i].audioButton->setChecked(false);
+                tiles_[i].audioButton->setVisible(false);
+                tiles_[i].audioButton->blockSignals(false);
+            }
             grid_->addWidget(tiles_[i].container, row, col);
             tiles_[i].player->play(cameras_[i].streamUrl(StreamType::Sub));
+            tiles_[i].player->setAudioEnabled(false);
         }
         return;
     }
@@ -242,12 +260,24 @@ void MainWindow::updateLayoutAndStreams()
         if (i == singleIndex_) {
             tiles_[i].container->setVisible(true);
             tiles_[i].toggleButton->setText(QStringLiteral("Back to Grid"));
+            if (tiles_[i].audioButton != nullptr) {
+                tiles_[i].audioButton->setVisible(true);
+            }
             grid_->addWidget(tiles_[i].container, 0, 0, 2, 2);
             tiles_[i].player->play(cameras_[i].streamUrl(StreamType::Main));
+            if (tiles_[i].audioButton != nullptr) {
+                tiles_[i].player->setAudioEnabled(tiles_[i].audioButton->isChecked());
+            }
         } else {
             tiles_[i].player->stop();
             tiles_[i].container->setVisible(false);
             tiles_[i].toggleButton->setText(QStringLiteral("Single"));
+            if (tiles_[i].audioButton != nullptr) {
+                tiles_[i].audioButton->blockSignals(true);
+                tiles_[i].audioButton->setChecked(false);
+                tiles_[i].audioButton->setVisible(false);
+                tiles_[i].audioButton->blockSignals(false);
+            }
         }
     }
 }

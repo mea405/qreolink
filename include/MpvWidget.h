@@ -15,6 +15,7 @@ public:
 
     void play(const QString& url);
     void stop();
+    void setAudioEnabled(bool enabled);
 
 signals:
     void statusChanged(const QString& status);
