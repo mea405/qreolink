@@ -12,10 +12,12 @@ int main(int argc, char* argv[])
     qputenv("LC_NUMERIC", QByteArrayLiteral("C"));
     std::setlocale(LC_NUMERIC, "C");
 
-    // mpv wid embedding is often unreliable on Wayland; prefer X11 backend.
-    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
-        qputenv("QT_QPA_PLATFORM", QByteArrayLiteral("xcb"));
-    }
+    // Respect session default platform plugin. Forcing xcb can cause
+    // input/focus issues on display hotplug in mixed DPI setups.
+
+    // Avoid fractional-scale coordinate drift on monitor hotplug.
+    QApplication::setHighDpiScaleFactorRoundingPolicy(
+        Qt::HighDpiScaleFactorRoundingPolicy::RoundPreferFloor);
 
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("qreolink"));

@@ -5,6 +5,7 @@
 
 struct mpv_handle;
 struct mpv_render_context;
+class QOpenGLContext;
 
 class MpvWidget : public QOpenGLWidget {
     Q_OBJECT
@@ -28,6 +29,8 @@ private:
     void processEvents();
     void emitStatus(const QString& status);
     bool initRenderContext();
+    void cleanupRenderContext();
+    void onContextAboutToBeDestroyed();
     static void onUpdate(void* ctx);
     static void* getProcAddress(void* ctx, const char* name);
 
@@ -36,4 +39,5 @@ private:
     QString lastStatus_;
     QString currentUrl_;
     bool mpvInitialized_ = false;
+    QOpenGLContext* glContext_ = nullptr;
 };

@@ -19,13 +19,7 @@ MpvWidget::MpvWidget(QWidget* parent)
 
 MpvWidget::~MpvWidget()
 {
-    if (mpvRender_ != nullptr) {
-        makeCurrent();
-        mpv_render_context_set_update_callback(mpvRender_, nullptr, nullptr);
-        mpv_render_context_free(mpvRender_);
-        mpvRender_ = nullptr;
-        doneCurrent();
-    }
+    cleanupRenderContext();
 
     if (mpv_ != nullptr) {
         mpv_terminate_destroy(mpv_);
@@ -81,6 +75,19 @@ bool MpvWidget::initMpv()
 
 void MpvWidget::initializeGL()
 {
+    QOpenGLContext* currentContext = context();
+    if (currentContext != glContext_) {
+        cleanupRenderContext();
+        glContext_ = currentContext;
+        if (glContext_ != nullptr) {
+            connect(glContext_,
+                    &QOpenGLContext::aboutToBeDestroyed,
+                    this,
+                    &MpvWidget::onContextAboutToBeDestroyed,
+                    Qt::DirectConnection);
+        }
+    }
+
     if (initMpv() && initRenderContext()) {
         loadCurrentUrl();
     }
@@ -170,6 +177,24 @@ bool MpvWidget::initRenderContext()
 
     mpv_render_context_set_update_callback(mpvRender_, &MpvWidget::onUpdate, this);
     return true;
+}
+
+void MpvWidget::cleanupRenderContext()
+{
+    if (mpvRender_ == nullptr) {
+        return;
+    }
+
+    mpv_render_context_set_update_callback(mpvRender_, nullptr, nullptr);
+    mpv_render_context_free(mpvRender_);
+    mpvRender_ = nullptr;
+}
+
+void MpvWidget::onContextAboutToBeDestroyed()
+{
+    // Screen/hotplug can recreate QOpenGLWidget context; force libmpv context rebuild.
+    cleanupRenderContext();
+    glContext_ = nullptr;
 }
 
 void MpvWidget::onUpdate(void* ctx)
