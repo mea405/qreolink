@@ -52,6 +52,9 @@ bool MpvWidget::initMpv()
     mpv_set_option_string(mpv_, "profile", "low-latency");
     mpv_set_option_string(mpv_, "untimed", "yes");
     mpv_set_option_string(mpv_, "cache", "yes");
+    mpv_set_option_string(mpv_, "cache-secs", "20");
+    mpv_set_option_string(mpv_, "demuxer-max-bytes", "134217728");
+    mpv_set_option_string(mpv_, "demuxer-max-back-bytes", "67108864");
     mpv_set_option_string(mpv_, "rtsp-transport", "tcp");
     mpv_set_option_string(mpv_, "audio", "no");
     mpv_set_option_string(mpv_, "hwdec", "no");
