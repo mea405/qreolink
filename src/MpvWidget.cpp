@@ -5,7 +5,6 @@
 #include <QMetaObject>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
-#include <QTimer>
 
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
@@ -19,6 +18,10 @@ MpvWidget::MpvWidget(QWidget* parent)
 
 MpvWidget::~MpvWidget()
 {
+    if (mpv_ != nullptr) {
+        mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
+    }
+
     cleanupRenderContext();
 
     if (mpv_ != nullptr) {
@@ -64,10 +67,7 @@ bool MpvWidget::initMpv()
     }
 
     mpv_request_log_messages(mpv_, "info");
-    auto* timer = new QTimer(this);
-    timer->setInterval(100);
-    connect(timer, &QTimer::timeout, this, &MpvWidget::processEvents);
-    timer->start();
+    mpv_set_wakeup_callback(mpv_, &MpvWidget::onMpvWakeup, this);
 
     mpvInitialized_ = true;
     return true;
@@ -203,6 +203,26 @@ void MpvWidget::onUpdate(void* ctx)
     QMetaObject::invokeMethod(self, "update", Qt::QueuedConnection);
 }
 
+void MpvWidget::onMpvWakeup(void* ctx)
+{
+    auto* self = static_cast<MpvWidget*>(ctx);
+    if (self == nullptr) {
+        return;
+    }
+
+    bool expected = false;
+    if (!self->processEventsQueued_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+
+    QMetaObject::invokeMethod(
+        self,
+        [self]() {
+            self->processEvents();
+        },
+        Qt::QueuedConnection);
+}
+
 void* MpvWidget::getProcAddress(void* ctx, const char* name)
 {
     auto* self = static_cast<MpvWidget*>(ctx);
@@ -245,6 +265,8 @@ void MpvWidget::emitStatus(const QString& status)
 
 void MpvWidget::processEvents()
 {
+    processEventsQueued_.store(false);
+
     if (mpv_ == nullptr) {
         return;
     }

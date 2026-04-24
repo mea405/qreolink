@@ -3,6 +3,8 @@
 #include <QOpenGLWidget>
 #include <QString>
 
+#include <atomic>
+
 struct mpv_handle;
 struct mpv_render_context;
 class QOpenGLContext;
@@ -31,6 +33,7 @@ private:
     bool initRenderContext();
     void cleanupRenderContext();
     void onContextAboutToBeDestroyed();
+    static void onMpvWakeup(void* ctx);
     static void onUpdate(void* ctx);
     static void* getProcAddress(void* ctx, const char* name);
 
@@ -40,4 +43,5 @@ private:
     QString currentUrl_;
     bool mpvInitialized_ = false;
     QOpenGLContext* glContext_ = nullptr;
+    std::atomic_bool processEventsQueued_ = false;
 };
