@@ -84,6 +84,16 @@ void MainWindow::buildUi()
         }
     });
 
+    const auto bindArrow = [this](int key) {
+        auto* shortcut = new QShortcut(QKeySequence(key), this);
+        shortcut->setContext(Qt::ApplicationShortcut);
+        connect(shortcut, &QShortcut::activated, this, [this, key]() {
+            singleViewArrowNavigate(key);
+        });
+    };
+    bindArrow(Qt::Key_Left);
+    bindArrow(Qt::Key_Right);
+
     auto* outer = new QVBoxLayout(central_);
     outer->setContentsMargins(8, 8, 8, 8);
     outer->setSpacing(8);
@@ -152,6 +162,26 @@ void MainWindow::toggleSingleView(int cameraIndex)
         singleIndex_ = cameraIndex;
     }
 
+    updateLayoutAndStreams();
+}
+
+void MainWindow::singleViewArrowNavigate(int qtKey)
+{
+    const int n = static_cast<int>(tiles_.size());
+    if (n <= 1 || singleIndex_ < 0 || singleIndex_ >= n) {
+        return;
+    }
+
+    int delta = 0;
+    if (qtKey == Qt::Key_Left) {
+        delta = -1;
+    } else if (qtKey == Qt::Key_Right) {
+        delta = 1;
+    } else {
+        return;
+    }
+
+    singleIndex_ = (singleIndex_ + delta + n) % n;
     updateLayoutAndStreams();
 }
 

@@ -32,6 +32,7 @@ private:
     void buildUi();
     void updateLayoutAndStreams();
     void toggleSingleView(int cameraIndex);
+    void singleViewArrowNavigate(int qtKey);
     void openSettingsDialog();
 
     QVector<CameraConfig> cameras_;
