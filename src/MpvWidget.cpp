@@ -3,6 +3,7 @@
 #include <clocale>
 #include <QDebug>
 #include <QMetaObject>
+#include <QMouseEvent>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
 
@@ -14,6 +15,16 @@ MpvWidget::MpvWidget(QWidget* parent)
 {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     initMpv();
+}
+
+void MpvWidget::mousePressEvent(QMouseEvent* event)
+{
+    if (event->button() == Qt::LeftButton) {
+        emit clicked();
+        event->accept();
+        return;
+    }
+    QOpenGLWidget::mousePressEvent(event);
 }
 
 MpvWidget::~MpvWidget()

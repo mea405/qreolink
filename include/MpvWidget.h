@@ -3,6 +3,8 @@
 #include <QOpenGLWidget>
 #include <QString>
 
+class QMouseEvent;
+
 #include <atomic>
 
 struct mpv_handle;
@@ -22,10 +24,12 @@ public:
 
 signals:
     void statusChanged(const QString& status);
+    void clicked();
 
 private:
     void initializeGL() override;
     void paintGL() override;
+    void mousePressEvent(QMouseEvent* event) override;
     bool initMpv();
     void loadCurrentUrl();
     void processEvents();

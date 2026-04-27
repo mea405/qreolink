@@ -149,6 +149,13 @@ void MainWindow::buildUi()
                 tiles_[i].status->setText(status);
             }
         });
+        connect(tile.player, &MpvWidget::clicked, this, [this, i]() {
+            if (singleIndex_ >= 0) {
+                return;
+            }
+            singleIndex_ = i;
+            updateLayoutAndStreams();
+        });
 
         tiles_.push_back(tile);
     }
