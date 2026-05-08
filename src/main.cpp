@@ -24,6 +24,11 @@ int main(int argc, char* argv[])
     app.setDesktopFileName(QStringLiteral("qreolink"));
     QLocale::setDefault(QLocale::c());
     std::setlocale(LC_NUMERIC, "C");
+    app.setStyleSheet(
+        "QMainWindow { background-color: #d3d3d3; }"
+    //     "QMenuBar { background-color: #3a3a3a; color: white; }"
+    //     "QToolBar { background-color: #3a3a3a; }"
+        );
 
     MainWindow window;
     const QIcon appIcon = QIcon::fromTheme(QStringLiteral("qreolink"));
