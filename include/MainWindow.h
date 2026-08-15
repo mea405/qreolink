@@ -6,6 +6,7 @@
 #include <QVector>
 
 class MpvWidget;
+class ReolinkCgiClient;
 class QGridLayout;
 class QPushButton;
 class QLabel;
@@ -25,6 +26,7 @@ private:
         MpvWidget* player = nullptr;
         QPushButton* toggleButton = nullptr;
         QPushButton* audioButton = nullptr;
+        QPushButton* rebootButton = nullptr;
     };
 
     QVector<CameraConfig> loadCameras();
@@ -34,9 +36,12 @@ private:
     void toggleSingleView(int cameraIndex);
     void singleViewArrowNavigate(int qtKey);
     void openSettingsDialog();
+    void rebootCamera(int cameraIndex);
+    void setRebootButtonsEnabled(bool enabled);
 
     QVector<CameraConfig> cameras_;
     QVector<Tile> tiles_;
+    ReolinkCgiClient* cgiClient_ = nullptr;
 
     QWidget* central_ = nullptr;
     QGridLayout* grid_ = nullptr;

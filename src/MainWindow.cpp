@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "MpvWidget.h"
+#include "ReolinkCgiClient.h"
 
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -10,6 +11,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QShortcut>
 #include <QSettings>
@@ -19,10 +21,20 @@
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , cameras_(loadCameras())
+    , cgiClient_(new ReolinkCgiClient(this))
 {
     setWindowTitle(QStringLiteral("qreolink"));
     resize(1400, 900);
     buildUi();
+    connect(cgiClient_, &ReolinkCgiClient::finished, this,
+            [this](bool ok, const QString& message) {
+                setRebootButtonsEnabled(true);
+                if (ok) {
+                    QMessageBox::information(this, QStringLiteral("Reboot"), message);
+                } else {
+                    QMessageBox::warning(this, QStringLiteral("Reboot"), message);
+                }
+            });
     updateLayoutAndStreams();
 }
 
@@ -119,6 +131,8 @@ void MainWindow::buildUi()
         auto* header = new QHBoxLayout();
         tile.title = new QLabel(cameras_[i].name, tile.container);
         tile.toggleButton = new QPushButton(QStringLiteral("Single"), tile.container);
+        tile.rebootButton = new QPushButton(QStringLiteral("Reboot"), tile.container);
+        tile.rebootButton->setToolTip(QStringLiteral("Reboot this camera via CGI API"));
         tile.audioButton = new QPushButton(QStringLiteral("Audio"), tile.container);
         tile.audioButton->setCheckable(true);
         tile.audioButton->setVisible(false);
@@ -126,6 +140,7 @@ void MainWindow::buildUi()
         header->addWidget(tile.title);
         header->addStretch();
         header->addWidget(tile.audioButton);
+        header->addWidget(tile.rebootButton);
         header->addWidget(tile.toggleButton);
 
         tile.player = new MpvWidget(tile.container);
@@ -137,6 +152,9 @@ void MainWindow::buildUi()
 
         connect(tile.toggleButton, &QPushButton::clicked, this, [this, i]() {
             toggleSingleView(i);
+        });
+        connect(tile.rebootButton, &QPushButton::clicked, this, [this, i]() {
+            rebootCamera(i);
         });
         connect(tile.audioButton, &QPushButton::toggled, this, [this, i](bool on) {
             if (singleIndex_ != i || i < 0 || i >= tiles_.size() || tiles_[i].player == nullptr) {
@@ -190,6 +208,45 @@ void MainWindow::singleViewArrowNavigate(int qtKey)
 
     singleIndex_ = (singleIndex_ + delta + n) % n;
     updateLayoutAndStreams();
+}
+
+void MainWindow::rebootCamera(int cameraIndex)
+{
+    if (cameraIndex < 0 || cameraIndex >= cameras_.size() || cgiClient_ == nullptr) {
+        return;
+    }
+    if (cgiClient_->isBusy()) {
+        QMessageBox::information(this, QStringLiteral("Reboot"),
+                                 QStringLiteral("A reboot request is already in progress."));
+        return;
+    }
+
+    const CameraConfig& camera = cameras_[cameraIndex];
+    const auto answer = QMessageBox::question(
+        this,
+        QStringLiteral("Reboot"),
+        QStringLiteral("Reboot \"%1\" (%2)?\n\nThe camera will be offline for about 1–2 minutes.")
+            .arg(camera.name, camera.host),
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (answer != QMessageBox::Yes) {
+        return;
+    }
+
+    setRebootButtonsEnabled(false);
+    if (cameraIndex < tiles_.size() && tiles_[cameraIndex].status != nullptr) {
+        tiles_[cameraIndex].status->setText(QStringLiteral("Rebooting…"));
+    }
+    cgiClient_->reboot(camera);
+}
+
+void MainWindow::setRebootButtonsEnabled(bool enabled)
+{
+    for (Tile& tile : tiles_) {
+        if (tile.rebootButton != nullptr) {
+            tile.rebootButton->setEnabled(enabled);
+        }
+    }
 }
 
 void MainWindow::openSettingsDialog()

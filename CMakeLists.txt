@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(GNUInstallDirs)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Network)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
 
@@ -16,9 +16,13 @@ qt_add_executable(qreolink
     include/MainWindow.h
     include/MpvWidget.h
     include/CameraConfig.h
+    include/AesCfb128.h
+    include/ReolinkCgiClient.h
     src/main.cpp
     src/MainWindow.cpp
     src/MpvWidget.cpp
+    src/AesCfb128.cpp
+    src/ReolinkCgiClient.cpp
 )
 
 target_include_directories(qreolink PRIVATE include)
@@ -26,6 +30,7 @@ target_include_directories(qreolink PRIVATE include)
 target_link_libraries(qreolink PRIVATE
     Qt6::Widgets
     Qt6::OpenGLWidgets
+    Qt6::Network
     PkgConfig::MPV
 )
 
@@ -53,7 +58,7 @@ set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 set(CPACK_DEBIAN_PACKAGE_SECTION "video")
 set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
 set(CPACK_DEBIAN_PACKAGE_DEPENDS
-    "libmpv2, libqt6core6t64 | libqt6core6, libqt6gui6, libqt6widgets6, libqt6opengl6, libqt6openglwidgets6, libgl1, libegl1"
+    "libmpv2, libqt6core6t64 | libqt6core6, libqt6gui6, libqt6widgets6, libqt6opengl6, libqt6openglwidgets6, libqt6network6t64 | libqt6network6, libgl1, libegl1"
 )
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 set(CPACK_DEBIAN_PACKAGE_MAINTAINER "qreolink")
