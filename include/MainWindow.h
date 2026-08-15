@@ -38,6 +38,7 @@ private:
     void openSettingsDialog();
     void rebootCamera(int cameraIndex);
     void setRebootButtonsEnabled(bool enabled);
+    void updateRebootButtonsVisibility();
 
     QVector<CameraConfig> cameras_;
     QVector<Tile> tiles_;

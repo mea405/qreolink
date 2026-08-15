@@ -3,6 +3,7 @@
 #include "MpvWidget.h"
 #include "ReolinkCgiClient.h"
 
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -61,6 +62,7 @@ QVector<CameraConfig> MainWindow::loadCameras()
                                          QStringLiteral("h264Preview_01_main")).toString();
         camera.subPath = settings.value(key + QStringLiteral("subPath"),
                                         QStringLiteral("h264Preview_01_sub")).toString();
+        camera.rebootEnabled = settings.value(key + QStringLiteral("rebootEnabled"), true).toBool();
         list.push_back(camera);
     }
 
@@ -80,6 +82,7 @@ void MainWindow::saveCameras(const QVector<CameraConfig>& cameras)
         settings.setValue(key + QStringLiteral("password"), cameras[i].password);
         settings.setValue(key + QStringLiteral("mainPath"), cameras[i].mainPath);
         settings.setValue(key + QStringLiteral("subPath"), cameras[i].subPath);
+        settings.setValue(key + QStringLiteral("rebootEnabled"), cameras[i].rebootEnabled);
     }
 }
 
@@ -132,7 +135,9 @@ void MainWindow::buildUi()
         tile.title = new QLabel(cameras_[i].name, tile.container);
         tile.toggleButton = new QPushButton(QStringLiteral("Single"), tile.container);
         tile.rebootButton = new QPushButton(QStringLiteral("Reboot"), tile.container);
-        tile.rebootButton->setToolTip(QStringLiteral("Reboot this camera via CGI API"));
+        tile.rebootButton->setToolTip(
+            QStringLiteral("Reboot this camera via CGI API (disable in Settings for cameras without web UI)"));
+        tile.rebootButton->setVisible(cameras_[i].rebootEnabled);
         tile.audioButton = new QPushButton(QStringLiteral("Audio"), tile.container);
         tile.audioButton->setCheckable(true);
         tile.audioButton->setVisible(false);
@@ -215,13 +220,17 @@ void MainWindow::rebootCamera(int cameraIndex)
     if (cameraIndex < 0 || cameraIndex >= cameras_.size() || cgiClient_ == nullptr) {
         return;
     }
+
+    const CameraConfig& camera = cameras_[cameraIndex];
+    if (!camera.rebootEnabled) {
+        return;
+    }
     if (cgiClient_->isBusy()) {
         QMessageBox::information(this, QStringLiteral("Reboot"),
                                  QStringLiteral("A reboot request is already in progress."));
         return;
     }
 
-    const CameraConfig& camera = cameras_[cameraIndex];
     const auto answer = QMessageBox::question(
         this,
         QStringLiteral("Reboot"),
@@ -242,10 +251,24 @@ void MainWindow::rebootCamera(int cameraIndex)
 
 void MainWindow::setRebootButtonsEnabled(bool enabled)
 {
-    for (Tile& tile : tiles_) {
-        if (tile.rebootButton != nullptr) {
-            tile.rebootButton->setEnabled(enabled);
+    for (int i = 0; i < tiles_.size(); ++i) {
+        if (tiles_[i].rebootButton == nullptr) {
+            continue;
         }
+        const bool show = i < cameras_.size() && cameras_[i].rebootEnabled;
+        tiles_[i].rebootButton->setEnabled(enabled && show);
+    }
+}
+
+void MainWindow::updateRebootButtonsVisibility()
+{
+    for (int i = 0; i < tiles_.size(); ++i) {
+        if (tiles_[i].rebootButton == nullptr) {
+            continue;
+        }
+        const bool show = i < cameras_.size() && cameras_[i].rebootEnabled;
+        tiles_[i].rebootButton->setVisible(show);
+        tiles_[i].rebootButton->setEnabled(show && (cgiClient_ == nullptr || !cgiClient_->isBusy()));
     }
 }
 
@@ -258,6 +281,7 @@ void MainWindow::openSettingsDialog()
         QLineEdit* password = nullptr;
         QLineEdit* mainPath = nullptr;
         QLineEdit* subPath = nullptr;
+        QCheckBox* rebootEnabled = nullptr;
     };
 
     QDialog dialog(this);
@@ -280,6 +304,10 @@ void MainWindow::openSettingsDialog()
         cameraFields.password->setEchoMode(QLineEdit::Normal);
         cameraFields.mainPath = new QLineEdit(cameras_[i].mainPath, group);
         cameraFields.subPath = new QLineEdit(cameras_[i].subPath, group);
+        cameraFields.rebootEnabled = new QCheckBox(QStringLiteral("Show Reboot button (web CGI)"), group);
+        cameraFields.rebootEnabled->setChecked(cameras_[i].rebootEnabled);
+        cameraFields.rebootEnabled->setToolTip(
+            QStringLiteral("Turn off for cameras without a web interface (e.g. E1 Pro)."));
 
         form->addRow(QStringLiteral("Name"), cameraFields.name);
         form->addRow(QStringLiteral("Host"), cameraFields.host);
@@ -287,6 +315,7 @@ void MainWindow::openSettingsDialog()
         form->addRow(QStringLiteral("Password"), cameraFields.password);
         form->addRow(QStringLiteral("Main path"), cameraFields.mainPath);
         form->addRow(QStringLiteral("Sub path"), cameraFields.subPath);
+        form->addRow(QStringLiteral("Reboot"), cameraFields.rebootEnabled);
 
         root->addWidget(group);
         fields.push_back(cameraFields);
@@ -309,6 +338,7 @@ void MainWindow::openSettingsDialog()
         updated[i].password = fields[i].password->text();
         updated[i].mainPath = fields[i].mainPath->text().trimmed();
         updated[i].subPath = fields[i].subPath->text().trimmed();
+        updated[i].rebootEnabled = fields[i].rebootEnabled->isChecked();
     }
 
     cameras_ = updated;
@@ -317,6 +347,7 @@ void MainWindow::openSettingsDialog()
     for (int i = 0; i < tiles_.size() && i < cameras_.size(); ++i) {
         tiles_[i].title->setText(cameras_[i].name);
     }
+    updateRebootButtonsVisibility();
 
     if (singleIndex_ >= cameras_.size()) {
         singleIndex_ = -1;

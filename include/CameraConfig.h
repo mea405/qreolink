@@ -15,6 +15,8 @@ struct CameraConfig {
     QString password;
     QString mainPath;
     QString subPath;
+    // False for cameras without web CGI (e.g. E1 Pro) — hides Reboot button.
+    bool rebootEnabled = true;
 
     [[nodiscard]] QString streamUrl(StreamType type) const
     {
