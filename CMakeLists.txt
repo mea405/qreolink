@@ -7,8 +7,54 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 include(GNUInstallDirs)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets OpenGLWidgets Network)
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+
+# Prefer a direct libmpv lookup. pkg-config's mpv module often lists transitive
+# include dirs (e.g. freetype2) that are missing when only libmpv2 is installed.
+find_path(MPV_INCLUDE_DIR
+    NAMES mpv/client.h
+    HINTS
+        "$ENV{MPV_DIR}/include"
+        "${CMAKE_SOURCE_DIR}/.deps/usr/include"
+        /usr/local/include
+        /usr/include
+)
+find_library(MPV_LIBRARY
+    NAMES mpv libmpv.so.2
+    HINTS
+        "$ENV{MPV_DIR}/lib"
+        "${CMAKE_SOURCE_DIR}/.deps/usr/lib/x86_64-linux-gnu"
+        /usr/local/lib
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib
+)
+# Some systems ship only the SONAME (libmpv.so.2) without the -dev linker name.
+if(NOT MPV_LIBRARY)
+    find_file(MPV_LIBRARY
+        NAMES libmpv.so.2
+        HINTS /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib
+    )
+endif()
+
+
+if(NOT MPV_INCLUDE_DIR OR NOT MPV_LIBRARY)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MPV REQUIRED mpv)
+    if(NOT MPV_INCLUDE_DIR AND MPV_INCLUDE_DIRS)
+        list(GET MPV_INCLUDE_DIRS 0 MPV_INCLUDE_DIR)
+    endif()
+    if(NOT MPV_LIBRARY AND MPV_LIBRARIES)
+        find_library(MPV_LIBRARY NAMES ${MPV_LIBRARIES})
+    endif()
+endif()
+
+if(NOT MPV_INCLUDE_DIR OR NOT MPV_LIBRARY)
+    message(FATAL_ERROR
+        "libmpv not found (mpv/client.h and -lmpv). Install libmpv-dev, "
+        "or extract headers into .deps/usr/include (see README).")
+endif()
+
+message(STATUS "libmpv include: ${MPV_INCLUDE_DIR}")
+message(STATUS "libmpv library: ${MPV_LIBRARY}")
 
 qt_standard_project_setup()
 
@@ -25,13 +71,16 @@ qt_add_executable(qreolink
     src/ReolinkCgiClient.cpp
 )
 
-target_include_directories(qreolink PRIVATE include)
+target_include_directories(qreolink PRIVATE
+    include
+    "${MPV_INCLUDE_DIR}"
+)
 
 target_link_libraries(qreolink PRIVATE
     Qt6::Widgets
     Qt6::OpenGLWidgets
     Qt6::Network
-    PkgConfig::MPV
+    "${MPV_LIBRARY}"
 )
 
 install(TARGETS qreolink

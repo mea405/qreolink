@@ -6,14 +6,23 @@
 #include <QMouseEvent>
 #include <QOpenGLContext>
 #include <QOpenGLFunctions>
+#include <QTimer>
 
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
+
+namespace {
+constexpr int kReconnectBaseMs = 1000;
+constexpr int kReconnectMaxMs = 30000;
+}
 
 MpvWidget::MpvWidget(QWidget* parent)
     : QOpenGLWidget(parent)
 {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    reconnectTimer_ = new QTimer(this);
+    reconnectTimer_->setSingleShot(true);
+    connect(reconnectTimer_, &QTimer::timeout, this, &MpvWidget::tryReconnect);
     initMpv();
 }
 
@@ -29,6 +38,8 @@ void MpvWidget::mousePressEvent(QMouseEvent* event)
 
 MpvWidget::~MpvWidget()
 {
+    cancelReconnect();
+
     if (mpv_ != nullptr) {
         mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
     }
@@ -56,14 +67,19 @@ bool MpvWidget::initMpv()
 
     mpv_set_option_string(mpv_, "terminal", "no");
     mpv_set_option_string(mpv_, "msg-level", "all=warn");
-    mpv_set_option_string(mpv_, "keep-open", "yes");
+    // Live RTSP: do not freeze on the last frame after disconnect.
+    mpv_set_option_string(mpv_, "keep-open", "no");
     mpv_set_option_string(mpv_, "profile", "low-latency");
     mpv_set_option_string(mpv_, "untimed", "yes");
     mpv_set_option_string(mpv_, "cache", "yes");
-    mpv_set_option_string(mpv_, "cache-secs", "20");
-    mpv_set_option_string(mpv_, "demuxer-max-bytes", "134217728");
-    mpv_set_option_string(mpv_, "demuxer-max-back-bytes", "67108864");
+    mpv_set_option_string(mpv_, "cache-secs", "3");
+    mpv_set_option_string(mpv_, "cache-pause", "no");
+    mpv_set_option_string(mpv_, "demuxer-max-bytes", "33554432");
+    mpv_set_option_string(mpv_, "demuxer-max-back-bytes", "16777216");
     mpv_set_option_string(mpv_, "rtsp-transport", "tcp");
+    // Fail stalled TCP/RTSP sessions so END_FILE fires and reconnect can run.
+    mpv_set_option_string(mpv_, "network-timeout", "10");
+    mpv_set_option_string(mpv_, "demuxer-lavf-o", "stimeout=10000000,rw_timeout=10000000");
     mpv_set_option_string(mpv_, "audio", "no");
     mpv_set_option_string(mpv_, "hwdec", "no");
     mpv_set_option_string(mpv_, "vd-lavc-threads", "2");
@@ -106,6 +122,9 @@ void MpvWidget::initializeGL()
 
 void MpvWidget::play(const QString& url)
 {
+    intentionalStop_ = false;
+    cancelReconnect();
+    reconnectAttempt_ = 0;
     currentUrl_ = url;
     emitStatus(QStringLiteral("Connecting..."));
 
@@ -124,7 +143,7 @@ void MpvWidget::play(const QString& url)
 
 void MpvWidget::loadCurrentUrl()
 {
-    if (mpv_ == nullptr || currentUrl_.isEmpty()) {
+    if (mpv_ == nullptr || currentUrl_.isEmpty() || intentionalStop_) {
         return;
     }
 
@@ -133,12 +152,18 @@ void MpvWidget::loadCurrentUrl()
     if (mpv_command(mpv_, cmd) < 0) {
         qWarning() << "Failed to start stream:" << currentUrl_;
         emitStatus(QStringLiteral("Failed to start stream command"));
+        scheduleReconnect(QStringLiteral("load failed"));
     }
 }
 
 void MpvWidget::stop()
 {
+    intentionalStop_ = true;
+    cancelReconnect();
+    reconnectAttempt_ = 0;
+
     if (mpv_ == nullptr) {
+        currentUrl_.clear();
         return;
     }
 
@@ -158,6 +183,46 @@ void MpvWidget::setAudioEnabled(bool enabled)
     if (mpv_set_property_string(mpv_, "audio", value) < 0) {
         qWarning() << "mpv_set_property audio failed";
     }
+}
+
+void MpvWidget::cancelReconnect()
+{
+    reconnectPending_ = false;
+    if (reconnectTimer_ != nullptr) {
+        reconnectTimer_->stop();
+    }
+}
+
+void MpvWidget::scheduleReconnect(const QString& reason)
+{
+    if (intentionalStop_ || currentUrl_.isEmpty() || reconnectPending_) {
+        return;
+    }
+
+    reconnectPending_ = true;
+    const int delayMs = qMin(kReconnectMaxMs, kReconnectBaseMs * (1 << qMin(reconnectAttempt_, 5)));
+    ++reconnectAttempt_;
+
+    emitStatus(QStringLiteral("Reconnecting in %1s… (%2)")
+                   .arg((delayMs + 999) / 1000)
+                   .arg(reason));
+    reconnectTimer_->start(delayMs);
+}
+
+void MpvWidget::tryReconnect()
+{
+    reconnectPending_ = false;
+    if (intentionalStop_ || currentUrl_.isEmpty()) {
+        return;
+    }
+
+    emitStatus(QStringLiteral("Reconnecting…"));
+    if (mpvRender_ == nullptr) {
+        update();
+        scheduleReconnect(QStringLiteral("render not ready"));
+        return;
+    }
+    loadCurrentUrl();
 }
 
 bool MpvWidget::initRenderContext()
@@ -293,15 +358,31 @@ void MpvWidget::processEvents()
             emitStatus(QStringLiteral("Opening stream..."));
             break;
         case MPV_EVENT_FILE_LOADED:
+            reconnectAttempt_ = 0;
+            cancelReconnect();
             emitStatus(QStringLiteral("Playing"));
             break;
         case MPV_EVENT_END_FILE: {
             auto* end = static_cast<mpv_event_end_file*>(event->data);
-            if (end != nullptr && end->error != MPV_ERROR_SUCCESS) {
-                emitStatus(QStringLiteral("Playback error: %1").arg(QString::fromUtf8(mpv_error_string(end->error))));
+            if (intentionalStop_ || currentUrl_.isEmpty()) {
+                break;
+            }
+
+            // Do not reconnect after an explicit stop/quit.
+            if (end != nullptr
+                && (end->reason == MPV_END_FILE_REASON_STOP
+                    || end->reason == MPV_END_FILE_REASON_QUIT)) {
+                break;
+            }
+
+            QString reason = QStringLiteral("stream ended");
+            if (end != nullptr && end->error < 0) {
+                reason = QString::fromUtf8(mpv_error_string(end->error));
+                emitStatus(QStringLiteral("Playback error: %1").arg(reason));
             } else {
                 emitStatus(QStringLiteral("Stream ended"));
             }
+            scheduleReconnect(reason);
             break;
         }
         case MPV_EVENT_LOG_MESSAGE: {

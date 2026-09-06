@@ -4,6 +4,7 @@
 #include <QString>
 
 class QMouseEvent;
+class QTimer;
 
 #include <atomic>
 
@@ -37,6 +38,9 @@ private:
     bool initRenderContext();
     void cleanupRenderContext();
     void onContextAboutToBeDestroyed();
+    void scheduleReconnect(const QString& reason);
+    void cancelReconnect();
+    void tryReconnect();
     static void onMpvWakeup(void* ctx);
     static void onUpdate(void* ctx);
     static void* getProcAddress(void* ctx, const char* name);
@@ -46,6 +50,10 @@ private:
     QString lastStatus_;
     QString currentUrl_;
     bool mpvInitialized_ = false;
+    bool intentionalStop_ = false;
+    bool reconnectPending_ = false;
+    int reconnectAttempt_ = 0;
+    QTimer* reconnectTimer_ = nullptr;
     QOpenGLContext* glContext_ = nullptr;
     std::atomic_bool processEventsQueued_ = false;
 };

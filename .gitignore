@@ -2,3 +2,4 @@ build/
 _CPack_Packages/
 *.deb
 .qtcreator/
+.deps/

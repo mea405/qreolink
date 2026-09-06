@@ -27,6 +27,9 @@ Minimal Linux desktop client for Reolink cameras using Qt + libmpv.
 sudo apt install -y cmake ninja-build g++ qt6-base-dev libmpv-dev pkg-config
 ```
 
+If `libmpv-dev` is unavailable, headers can be placed under `.deps/usr/include/mpv/`
+(the CMakeLists falls back to that path). Runtime still needs `libmpv2`.
+
 ## Build
 
 ```bash
