@@ -14,11 +14,13 @@
 #include <QSslConfiguration>
 #include <QSslError>
 #include <QSslSocket>
+#include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVector>
 
 namespace {
+constexpr int kRequestTimeoutMs = 15000;
 
 QString headerValue(const QNetworkReply* reply, const QByteArray& name)
 {
@@ -41,13 +43,21 @@ QString headerValue(const QNetworkReply* reply, const QByteArray& name)
 ReolinkCgiClient::ReolinkCgiClient(QObject* parent)
     : QObject(parent)
     , nam_(new QNetworkAccessManager(this))
+    , requestTimer_(new QTimer(this))
 {
+    requestTimer_->setSingleShot(true);
+    connect(requestTimer_, &QTimer::timeout, this, &ReolinkCgiClient::onRequestTimeout);
     connect(nam_, &QNetworkAccessManager::sslErrors, this,
             [](QNetworkReply* reply, const QList<QSslError>&) {
                 if (reply != nullptr) {
                     reply->ignoreSslErrors();
                 }
             });
+}
+
+ReolinkCgiClient::~ReolinkCgiClient()
+{
+    clearReply();
 }
 
 void ReolinkCgiClient::reboot(const CameraConfig& camera)
@@ -64,6 +74,41 @@ void ReolinkCgiClient::reboot(const CameraConfig& camera)
     resetSession();
     camera_ = camera;
     beginChallenge(QStringLiteral("http://%1").arg(camera.host.trimmed()), State::ChallengeHttp);
+}
+
+void ReolinkCgiClient::clearReply()
+{
+    if (requestTimer_ != nullptr) {
+        requestTimer_->stop();
+    }
+    if (currentReply_ == nullptr) {
+        return;
+    }
+    QNetworkReply* reply = currentReply_;
+    currentReply_ = nullptr;
+    reply->disconnect(this);
+    reply->abort();
+    reply->deleteLater();
+}
+
+void ReolinkCgiClient::watchReply(QNetworkReply* reply)
+{
+    clearReply();
+    currentReply_ = reply;
+    if (reply == nullptr) {
+        return;
+    }
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() { onReplyFinished(reply); });
+    requestTimer_->start(kRequestTimeoutMs);
+}
+
+void ReolinkCgiClient::onRequestTimeout()
+{
+    if (state_ == State::Idle && currentReply_ == nullptr) {
+        return;
+    }
+    clearReply();
+    fail(QStringLiteral("Request timed out"));
 }
 
 void ReolinkCgiClient::resetSession()
@@ -120,8 +165,7 @@ void ReolinkCgiClient::beginChallenge(const QString& baseUrl, State state)
         {QStringLiteral("action"), 0},
         {QStringLiteral("param"), QJsonObject{{QStringLiteral("Version"), 1}}},
     }};
-    QNetworkReply* reply = nam_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() { onReplyFinished(reply); });
+    watchReply(nam_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact)));
 }
 
 QString ReolinkCgiClient::md5Hex(const QString& input)
@@ -223,8 +267,7 @@ void ReolinkCgiClient::sendDigestLogin()
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     configureSsl(&request);
-    QNetworkReply* reply = nam_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() { onReplyFinished(reply); });
+    watchReply(nam_->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact)));
 }
 
 QByteArray ReolinkCgiClient::makeCommandBody(const QString& cmd) const
@@ -280,12 +323,17 @@ void ReolinkCgiClient::sendReboot()
     QNetworkRequest request(url);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     configureSsl(&request);
-    QNetworkReply* reply = nam_->post(request, makeCommandBody(QStringLiteral("Reboot")));
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() { onReplyFinished(reply); });
+    watchReply(nam_->post(request, makeCommandBody(QStringLiteral("Reboot"))));
 }
 
 void ReolinkCgiClient::onReplyFinished(QNetworkReply* reply)
 {
+    if (currentReply_ == reply) {
+        currentReply_ = nullptr;
+    }
+    if (requestTimer_ != nullptr) {
+        requestTimer_->stop();
+    }
     reply->deleteLater();
 
     if (state_ == State::Idle) {

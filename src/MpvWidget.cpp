@@ -122,6 +122,11 @@ void MpvWidget::initializeGL()
 
 void MpvWidget::play(const QString& url)
 {
+    // Same target (playing or reconnecting): do not reset backoff or reload.
+    if (!url.isEmpty() && url == currentUrl_ && !intentionalStop_) {
+        return;
+    }
+
     intentionalStop_ = false;
     cancelReconnect();
     reconnectAttempt_ = 0;

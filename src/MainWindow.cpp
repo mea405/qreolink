@@ -101,7 +101,7 @@ void MainWindow::buildUi()
 
     const auto bindArrow = [this](int key) {
         auto* shortcut = new QShortcut(QKeySequence(key), this);
-        shortcut->setContext(Qt::ApplicationShortcut);
+        shortcut->setContext(Qt::WindowShortcut);
         connect(shortcut, &QShortcut::activated, this, [this, key]() {
             singleViewArrowNavigate(key);
         });

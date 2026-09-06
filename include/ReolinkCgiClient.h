@@ -7,6 +7,7 @@
 
 class QNetworkAccessManager;
 class QNetworkReply;
+class QTimer;
 
 // Reolink web CGI client: digest login + AES-CFB encrypted commands.
 class ReolinkCgiClient : public QObject {
@@ -14,6 +15,7 @@ class ReolinkCgiClient : public QObject {
 
 public:
     explicit ReolinkCgiClient(QObject* parent = nullptr);
+    ~ReolinkCgiClient() override;
 
     // Starts async reboot. Emits finished() when done (or on error).
     void reboot(const CameraConfig& camera);
@@ -39,7 +41,10 @@ private:
     void sendDigestLogin();
     void sendReboot();
     void configureSsl(class QNetworkRequest* request) const;
+    void watchReply(QNetworkReply* reply);
+    void clearReply();
     void onReplyFinished(QNetworkReply* reply);
+    void onRequestTimeout();
 
     [[nodiscard]] static QString md5Hex(const QString& input);
     [[nodiscard]] static QString randomCnonce();
@@ -48,6 +53,8 @@ private:
     [[nodiscard]] bool parseDigestChallenge(const QString& header);
 
     QNetworkAccessManager* nam_ = nullptr;
+    QNetworkReply* currentReply_ = nullptr;
+    QTimer* requestTimer_ = nullptr;
     State state_ = State::Idle;
 
     CameraConfig camera_;
