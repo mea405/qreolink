@@ -14,6 +14,7 @@
 namespace {
 constexpr int kReconnectBaseMs = 1000;
 constexpr int kReconnectMaxMs = 30000;
+constexpr int kDecoderFlushMinIntervalMs = 1500;
 }
 
 MpvWidget::MpvWidget(QWidget* parent)
@@ -38,6 +39,7 @@ void MpvWidget::mousePressEvent(QMouseEvent* event)
 
 MpvWidget::~MpvWidget()
 {
+    ++playbackEpoch_;
     cancelReconnect();
 
     if (mpv_ != nullptr) {
@@ -45,11 +47,46 @@ MpvWidget::~MpvWidget()
     }
 
     cleanupRenderContext();
+    glContext_ = nullptr;
 
     if (mpv_ != nullptr) {
         mpv_terminate_destroy(mpv_);
         mpv_ = nullptr;
     }
+    mpvInitialized_ = false;
+}
+
+void MpvWidget::destroyMpv()
+{
+    cancelReconnect();
+    streamLoadIssued_ = false;
+
+    if (mpv_ != nullptr) {
+        mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
+    }
+
+    const bool hasGl = (context() != nullptr);
+    if (hasGl) {
+        makeCurrent();
+    }
+    cleanupRenderContext();
+    if (glContext_ != nullptr) {
+        disconnect(glContext_,
+                   &QOpenGLContext::aboutToBeDestroyed,
+                   this,
+                   &MpvWidget::onContextAboutToBeDestroyed);
+        glContext_ = nullptr;
+    }
+    if (hasGl) {
+        doneCurrent();
+    }
+
+    if (mpv_ != nullptr) {
+        mpv_terminate_destroy(mpv_);
+        mpv_ = nullptr;
+    }
+    mpvInitialized_ = false;
+    processEventsQueued_.store(false);
 }
 
 bool MpvWidget::initMpv()
@@ -69,20 +106,30 @@ bool MpvWidget::initMpv()
     mpv_set_option_string(mpv_, "msg-level", "all=warn");
     // Live RTSP: do not freeze on the last frame after disconnect.
     mpv_set_option_string(mpv_, "keep-open", "no");
-    mpv_set_option_string(mpv_, "profile", "low-latency");
-    mpv_set_option_string(mpv_, "untimed", "yes");
+    // Do not use profile=low-latency / video-latency-hacks: they set fflags=+nobuffer
+    // and shrink decoder delay, which splits Reolink main-stream slices into fake
+    // frames (h264 "top block unavailable" / "error while decoding MB 40 0").
+    mpv_set_option_string(mpv_, "untimed", "no");
+    mpv_set_option_string(mpv_, "video-sync", "desync");
+    // Reolink RTSP timestamps jump between independent bases; waiting on them stalls video.
+    mpv_set_option_string(mpv_, "correct-pts", "no");
+    mpv_set_option_string(mpv_, "interpolation", "no");
     mpv_set_option_string(mpv_, "cache", "yes");
-    mpv_set_option_string(mpv_, "cache-secs", "3");
+    mpv_set_option_string(mpv_, "cache-secs", "1");
     mpv_set_option_string(mpv_, "cache-pause", "no");
-    mpv_set_option_string(mpv_, "demuxer-max-bytes", "33554432");
-    mpv_set_option_string(mpv_, "demuxer-max-back-bytes", "16777216");
+    mpv_set_option_string(mpv_, "demuxer-max-bytes", "16777216");
+    mpv_set_option_string(mpv_, "demuxer-max-back-bytes", "8388608");
+    mpv_set_option_string(mpv_, "demuxer-lavf-analyzeduration", "1.0");
+    mpv_set_option_string(mpv_, "demuxer-lavf-probesize", "1048576");
     mpv_set_option_string(mpv_, "rtsp-transport", "tcp");
     // Fail stalled TCP/RTSP sessions so END_FILE fires and reconnect can run.
     mpv_set_option_string(mpv_, "network-timeout", "10");
-    mpv_set_option_string(mpv_, "demuxer-lavf-o", "stimeout=10000000,rw_timeout=10000000");
+    mpv_set_option_string(mpv_, "demuxer-lavf-o",
+                          "stimeout=10000000,rw_timeout=10000000,fflags=-nobuffer");
     mpv_set_option_string(mpv_, "audio", "no");
     mpv_set_option_string(mpv_, "hwdec", "no");
-    mpv_set_option_string(mpv_, "vd-lavc-threads", "2");
+    // Frame-threaded H.264 + a mid-GOP RTSP join produces "top block unavailable" artifacts.
+    mpv_set_option_string(mpv_, "vd-lavc-threads", "1");
     mpv_set_option_string(mpv_, "fbo-format", "rgba8");
     mpv_set_option_string(mpv_, "vo", "libmpv");
 
@@ -105,6 +152,12 @@ void MpvWidget::initializeGL()
     QOpenGLContext* currentContext = context();
     if (currentContext != glContext_) {
         cleanupRenderContext();
+        if (glContext_ != nullptr) {
+            disconnect(glContext_,
+                       &QOpenGLContext::aboutToBeDestroyed,
+                       this,
+                       &MpvWidget::onContextAboutToBeDestroyed);
+        }
         glContext_ = currentContext;
         if (glContext_ != nullptr) {
             connect(glContext_,
@@ -116,14 +169,19 @@ void MpvWidget::initializeGL()
     }
 
     if (initMpv() && initRenderContext()) {
-        loadCurrentUrl();
+        // Resize/reparent (grid ↔ single) recreates the GL context. Restarting RTSP
+        // here joins the bitstream mid-NAL and leaves a corrupt picture until the
+        // next IDR — which Reolink may not send for a long time.
+        if (!streamLoadIssued_) {
+            loadCurrentUrl();
+        }
     }
 }
 
 void MpvWidget::play(const QString& url)
 {
     // Same target (playing or reconnecting): do not reset backoff or reload.
-    if (!url.isEmpty() && url == currentUrl_ && !intentionalStop_) {
+    if (!url.isEmpty() && url == currentUrl_ && !intentionalStop_ && mpv_ != nullptr) {
         return;
     }
 
@@ -133,17 +191,59 @@ void MpvWidget::play(const QString& url)
     currentUrl_ = url;
     emitStatus(QStringLiteral("Connecting..."));
 
+    // Block initializeGL from loadfile on the stale instance. A hidden widget
+    // (arrow switch in single view) still has an old RTSP/RTP session; reusing it
+    // produces "RTP: bad cseq" and a broken picture.
+    streamLoadIssued_ = true;
+    const int epoch = ++playbackEpoch_;
+    QMetaObject::invokeMethod(
+        this,
+        [this, epoch]() {
+            if (epoch != playbackEpoch_ || intentionalStop_ || currentUrl_.isEmpty()) {
+                return;
+            }
+            beginPlayback();
+        },
+        Qt::QueuedConnection);
+}
+
+void MpvWidget::beginPlayback()
+{
+    destroyMpv();
+
     if (!initMpv()) {
         emitStatus(QStringLiteral("mpv init failed"));
         return;
     }
 
-    if (mpvRender_ == nullptr) {
+    if (context() == nullptr) {
+        streamLoadIssued_ = false;
+        update();
+        return;
+    }
+
+    makeCurrent();
+    const bool ok = initRenderContext();
+    if (ok && glContext_ == nullptr) {
+        glContext_ = context();
+        if (glContext_ != nullptr) {
+            connect(glContext_,
+                    &QOpenGLContext::aboutToBeDestroyed,
+                    this,
+                    &MpvWidget::onContextAboutToBeDestroyed,
+                    Qt::DirectConnection);
+        }
+    }
+    doneCurrent();
+
+    if (!ok) {
+        streamLoadIssued_ = false;
         update();
         return;
     }
 
     loadCurrentUrl();
+    applyAudioSetting();
 }
 
 void MpvWidget::loadCurrentUrl()
@@ -152,42 +252,46 @@ void MpvWidget::loadCurrentUrl()
         return;
     }
 
+    streamLoadIssued_ = true;
+
     const QByteArray utf8 = currentUrl_.toUtf8();
     const char* cmd[] = {"loadfile", utf8.constData(), "replace", nullptr};
     if (mpv_command(mpv_, cmd) < 0) {
+        streamLoadIssued_ = false;
         qWarning() << "Failed to start stream:" << currentUrl_;
         emitStatus(QStringLiteral("Failed to start stream command"));
         scheduleReconnect(QStringLiteral("load failed"));
+        return;
     }
+    applyAudioSetting();
 }
 
 void MpvWidget::stop()
 {
+    ++playbackEpoch_;
     intentionalStop_ = true;
     cancelReconnect();
     reconnectAttempt_ = 0;
-
-    if (mpv_ == nullptr) {
-        currentUrl_.clear();
-        return;
-    }
-
-    const char* cmd[] = {"stop", nullptr};
-    mpv_command(mpv_, cmd);
-    setAudioEnabled(false);
-    emitStatus(QStringLiteral("Stopped"));
     currentUrl_.clear();
+    destroyMpv();
+    emitStatus(QStringLiteral("Stopped"));
 }
 
-void MpvWidget::setAudioEnabled(bool enabled)
+void MpvWidget::applyAudioSetting()
 {
     if (mpv_ == nullptr) {
         return;
     }
-    const char* value = enabled ? "auto" : "no";
+    const char* value = audioEnabled_ ? "auto" : "no";
     if (mpv_set_property_string(mpv_, "audio", value) < 0) {
         qWarning() << "mpv_set_property audio failed";
     }
+}
+
+void MpvWidget::setAudioEnabled(bool enabled)
+{
+    audioEnabled_ = enabled;
+    applyAudioSetting();
 }
 
 void MpvWidget::cancelReconnect()
@@ -222,12 +326,20 @@ void MpvWidget::tryReconnect()
     }
 
     emitStatus(QStringLiteral("Reconnecting…"));
-    if (mpvRender_ == nullptr) {
-        update();
-        scheduleReconnect(QStringLiteral("render not ready"));
+    beginPlayback();
+}
+
+void MpvWidget::flushDecoderAfterError()
+{
+    if (mpv_ == nullptr || intentionalStop_ || currentUrl_.isEmpty()) {
         return;
     }
-    loadCurrentUrl();
+    if (decoderFlushTimer_.isValid() && decoderFlushTimer_.elapsed() < kDecoderFlushMinIntervalMs) {
+        return;
+    }
+    decoderFlushTimer_.restart();
+    const char* drop[] = {"drop-buffers", nullptr};
+    mpv_command(mpv_, drop);
 }
 
 bool MpvWidget::initRenderContext()
@@ -406,6 +518,13 @@ void MpvWidget::processEvents()
                 break;
             }
             if (text.contains(QStringLiteral("bad cseq"), Qt::CaseInsensitive)) {
+                break;
+            }
+
+            if (text.contains(QStringLiteral("error while decoding MB"), Qt::CaseInsensitive)
+                || text.contains(QStringLiteral("block unavailable"), Qt::CaseInsensitive)
+                || text.contains(QStringLiteral("cabac decode"), Qt::CaseInsensitive)) {
+                flushDecoderAfterError();
                 break;
             }
 

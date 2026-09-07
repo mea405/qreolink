@@ -383,26 +383,28 @@ void MainWindow::updateLayoutAndStreams()
 
     for (int i = 0; i < tiles_.size(); ++i) {
         if (i == singleIndex_) {
-            tiles_[i].container->setVisible(true);
-            tiles_[i].toggleButton->setText(QStringLiteral("Back to Grid"));
-            if (tiles_[i].audioButton != nullptr) {
-                tiles_[i].audioButton->setVisible(true);
-            }
-            grid_->addWidget(tiles_[i].container, 0, 0, 2, 2);
-            tiles_[i].player->play(cameras_[i].streamUrl(StreamType::Main));
-            if (tiles_[i].audioButton != nullptr) {
-                tiles_[i].player->setAudioEnabled(tiles_[i].audioButton->isChecked());
-            }
-        } else {
-            tiles_[i].player->stop();
-            tiles_[i].container->setVisible(false);
-            tiles_[i].toggleButton->setText(QStringLiteral("Single"));
-            if (tiles_[i].audioButton != nullptr) {
-                tiles_[i].audioButton->blockSignals(true);
-                tiles_[i].audioButton->setChecked(false);
-                tiles_[i].audioButton->setVisible(false);
-                tiles_[i].audioButton->blockSignals(false);
-            }
+            continue;
         }
+        tiles_[i].player->stop();
+        tiles_[i].container->setVisible(false);
+        tiles_[i].toggleButton->setText(QStringLiteral("Single"));
+        if (tiles_[i].audioButton != nullptr) {
+            tiles_[i].audioButton->blockSignals(true);
+            tiles_[i].audioButton->setChecked(false);
+            tiles_[i].audioButton->setVisible(false);
+            tiles_[i].audioButton->blockSignals(false);
+        }
+    }
+
+    auto& tile = tiles_[singleIndex_];
+    tile.container->setVisible(true);
+    tile.toggleButton->setText(QStringLiteral("Back to Grid"));
+    if (tile.audioButton != nullptr) {
+        tile.audioButton->setVisible(true);
+    }
+    grid_->addWidget(tile.container, 0, 0, 2, 2);
+    tile.player->play(cameras_[singleIndex_].streamUrl(StreamType::Main));
+    if (tile.audioButton != nullptr) {
+        tile.player->setAudioEnabled(tile.audioButton->isChecked());
     }
 }
