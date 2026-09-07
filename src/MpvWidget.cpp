@@ -14,7 +14,9 @@
 namespace {
 constexpr int kReconnectBaseMs = 1000;
 constexpr int kReconnectMaxMs = 30000;
-constexpr int kDecoderFlushMinIntervalMs = 1500;
+constexpr int kStreamResetMinIntervalMs = 8000;
+constexpr int kDtsJumpWindowMs = 2000;
+constexpr int kDtsJumpsBeforeReset = 3;
 }
 
 MpvWidget::MpvWidget(QWidget* parent)
@@ -59,7 +61,6 @@ MpvWidget::~MpvWidget()
 void MpvWidget::destroyMpv()
 {
     cancelReconnect();
-    streamLoadIssued_ = false;
 
     if (mpv_ != nullptr) {
         mpv_set_wakeup_callback(mpv_, nullptr, nullptr);
@@ -124,9 +125,17 @@ bool MpvWidget::initMpv()
     mpv_set_option_string(mpv_, "rtsp-transport", "tcp");
     // Fail stalled TCP/RTSP sessions so END_FILE fires and reconnect can run.
     mpv_set_option_string(mpv_, "network-timeout", "10");
-    mpv_set_option_string(mpv_, "demuxer-lavf-o",
-                          "stimeout=10000000,rw_timeout=10000000,fflags=-nobuffer");
-    mpv_set_option_string(mpv_, "audio", "no");
+    // Reolink timestamps can jump between independent bases on video (stream 0)
+    // and audio (stream 1). If lavf reorders/drops on DTS, H.264 slices of one
+    // frame are decoded as separate pictures ("top block unavailable", MB 40 0).
+    QByteArray lavfOpts =
+        "stimeout=10000000,rw_timeout=10000000,"
+        "fflags=-nobuffer+igndts,reorder_queue_size=0";
+    if (!audioEnabled_) {
+        lavfOpts += ",allowed_media_types=video";
+    }
+    mpv_set_option_string(mpv_, "demuxer-lavf-o", lavfOpts.constData());
+    mpv_set_option_string(mpv_, "audio", audioEnabled_ ? "auto" : "no");
     mpv_set_option_string(mpv_, "hwdec", "no");
     // Frame-threaded H.264 + a mid-GOP RTSP join produces "top block unavailable" artifacts.
     mpv_set_option_string(mpv_, "vd-lavc-threads", "1");
@@ -172,7 +181,9 @@ void MpvWidget::initializeGL()
         // Resize/reparent (grid ↔ single) recreates the GL context. Restarting RTSP
         // here joins the bitstream mid-NAL and leaves a corrupt picture until the
         // next IDR — which Reolink may not send for a long time.
-        if (!streamLoadIssued_) {
+        // makeCurrent() inside beginPlayback/destroyMpv can reenter initializeGL;
+        // never loadfile from that nested call (it would open a second RTSP session).
+        if (!startingPlayback_ && !streamLoadIssued_) {
             loadCurrentUrl();
         }
     }
@@ -209,14 +220,18 @@ void MpvWidget::play(const QString& url)
 
 void MpvWidget::beginPlayback()
 {
+    startingPlayback_ = true;
+    streamLoadIssued_ = true;
     destroyMpv();
 
     if (!initMpv()) {
+        startingPlayback_ = false;
         emitStatus(QStringLiteral("mpv init failed"));
         return;
     }
 
     if (context() == nullptr) {
+        startingPlayback_ = false;
         streamLoadIssued_ = false;
         update();
         return;
@@ -237,6 +252,7 @@ void MpvWidget::beginPlayback()
     doneCurrent();
 
     if (!ok) {
+        startingPlayback_ = false;
         streamLoadIssued_ = false;
         update();
         return;
@@ -244,6 +260,7 @@ void MpvWidget::beginPlayback()
 
     loadCurrentUrl();
     applyAudioSetting();
+    startingPlayback_ = false;
 }
 
 void MpvWidget::loadCurrentUrl()
@@ -273,6 +290,7 @@ void MpvWidget::stop()
     cancelReconnect();
     reconnectAttempt_ = 0;
     currentUrl_.clear();
+    streamLoadIssued_ = false;
     destroyMpv();
     emitStatus(QStringLiteral("Stopped"));
 }
@@ -290,8 +308,16 @@ void MpvWidget::applyAudioSetting()
 
 void MpvWidget::setAudioEnabled(bool enabled)
 {
+    const bool changed = (audioEnabled_ != enabled);
     audioEnabled_ = enabled;
     applyAudioSetting();
+    if (!changed || currentUrl_.isEmpty() || intentionalStop_) {
+        return;
+    }
+    // RTSP SETUP with/without audio must be redone; toggling the mpv property is not enough.
+    const QString url = currentUrl_;
+    currentUrl_.clear();
+    play(url);
 }
 
 void MpvWidget::cancelReconnect()
@@ -329,17 +355,45 @@ void MpvWidget::tryReconnect()
     beginPlayback();
 }
 
-void MpvWidget::flushDecoderAfterError()
+void MpvWidget::replayCurrentUrl()
 {
-    if (mpv_ == nullptr || intentionalStop_ || currentUrl_.isEmpty()) {
+    if (intentionalStop_ || currentUrl_.isEmpty() || startingPlayback_) {
         return;
     }
-    if (decoderFlushTimer_.isValid() && decoderFlushTimer_.elapsed() < kDecoderFlushMinIntervalMs) {
+    const QString url = currentUrl_;
+    currentUrl_.clear();
+    play(url);
+}
+
+void MpvWidget::noteUnstableStream(const QString& text)
+{
+    if (intentionalStop_ || currentUrl_.isEmpty() || startingPlayback_) {
         return;
     }
-    decoderFlushTimer_.restart();
-    const char* drop[] = {"drop-buffers", nullptr};
-    mpv_command(mpv_, drop);
+    if (streamResetTimer_.isValid() && streamResetTimer_.elapsed() < kStreamResetMinIntervalMs) {
+        return;
+    }
+
+    const bool dtsJump = text.contains(QStringLiteral("DTS discontinuity"), Qt::CaseInsensitive);
+    const bool badCseq = text.contains(QStringLiteral("bad cseq"), Qt::CaseInsensitive);
+    if (!dtsJump && !badCseq) {
+        return;
+    }
+
+    if (dtsJump) {
+        if (!dtsJumpWindow_.isValid() || dtsJumpWindow_.elapsed() > kDtsJumpWindowMs) {
+            dtsJumpCount_ = 0;
+            dtsJumpWindow_.restart();
+        }
+        ++dtsJumpCount_;
+        if (dtsJumpCount_ < kDtsJumpsBeforeReset) {
+            return;
+        }
+        dtsJumpCount_ = 0;
+    }
+
+    streamResetTimer_.restart();
+    replayCurrentUrl();
 }
 
 bool MpvWidget::initRenderContext()
@@ -476,6 +530,7 @@ void MpvWidget::processEvents()
             break;
         case MPV_EVENT_FILE_LOADED:
             reconnectAttempt_ = 0;
+            dtsJumpCount_ = 0;
             cancelReconnect();
             emitStatus(QStringLiteral("Playing"));
             break;
@@ -517,14 +572,8 @@ void MpvWidget::processEvents()
                               Qt::CaseInsensitive)) {
                 break;
             }
+            noteUnstableStream(text);
             if (text.contains(QStringLiteral("bad cseq"), Qt::CaseInsensitive)) {
-                break;
-            }
-
-            if (text.contains(QStringLiteral("error while decoding MB"), Qt::CaseInsensitive)
-                || text.contains(QStringLiteral("block unavailable"), Qt::CaseInsensitive)
-                || text.contains(QStringLiteral("cabac decode"), Qt::CaseInsensitive)) {
-                flushDecoderAfterError();
                 break;
             }
 

@@ -375,8 +375,8 @@ void MainWindow::updateLayoutAndStreams()
                 tiles_[i].audioButton->blockSignals(false);
             }
             grid_->addWidget(tiles_[i].container, row, col);
-            tiles_[i].player->play(cameras_[i].streamUrl(StreamType::Sub));
             tiles_[i].player->setAudioEnabled(false);
+            tiles_[i].player->play(cameras_[i].streamUrl(StreamType::Sub));
         }
         return;
     }
@@ -403,8 +403,6 @@ void MainWindow::updateLayoutAndStreams()
         tile.audioButton->setVisible(true);
     }
     grid_->addWidget(tile.container, 0, 0, 2, 2);
+    tile.player->setAudioEnabled(tile.audioButton != nullptr && tile.audioButton->isChecked());
     tile.player->play(cameras_[singleIndex_].streamUrl(StreamType::Main));
-    if (tile.audioButton != nullptr) {
-        tile.player->setAudioEnabled(tile.audioButton->isChecked());
-    }
 }

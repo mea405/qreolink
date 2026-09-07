@@ -45,7 +45,8 @@ private:
     void scheduleReconnect(const QString& reason);
     void cancelReconnect();
     void tryReconnect();
-    void flushDecoderAfterError();
+    void noteUnstableStream(const QString& text);
+    void replayCurrentUrl();
     static void onMpvWakeup(void* ctx);
     static void onUpdate(void* ctx);
     static void* getProcAddress(void* ctx, const char* name);
@@ -57,12 +58,15 @@ private:
     bool mpvInitialized_ = false;
     bool intentionalStop_ = false;
     bool streamLoadIssued_ = false;
+    bool startingPlayback_ = false;
     bool audioEnabled_ = false;
     bool reconnectPending_ = false;
     int reconnectAttempt_ = 0;
     int playbackEpoch_ = 0;
+    int dtsJumpCount_ = 0;
     QTimer* reconnectTimer_ = nullptr;
-    QElapsedTimer decoderFlushTimer_;
+    QElapsedTimer streamResetTimer_;
+    QElapsedTimer dtsJumpWindow_;
     QOpenGLContext* glContext_ = nullptr;
     std::atomic_bool processEventsQueued_ = false;
 };
